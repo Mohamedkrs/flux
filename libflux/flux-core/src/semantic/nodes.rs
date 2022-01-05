@@ -28,8 +28,8 @@ use crate::{
         infer::{self, Constraint},
         sub::{BindVars, Substitutable, Substituter, Substitution},
         types::{
-            self, Dictionary, Function, Kind, Label, MonoType, MonoTypeMap, PolyType, Tvar,
-            TvarKinds,
+            self, Dictionary, Function, Kind, Label, MonoType, MonoTypeMap, PolyType, RecordLabel,
+            Tvar, TvarKinds,
         },
     },
 };
@@ -189,7 +189,7 @@ pub enum Statement {
 }
 
 impl Statement {
-    fn apply(self, sub: &Substitution) -> Self {
+    fn apply(self, sub: &dyn Substituter) -> Self {
         match self {
             Statement::Expr(stmt) => Statement::Expr(stmt.apply(sub)),
             Statement::Variable(stmt) => Statement::Variable(Box::new(stmt.apply(sub))),
@@ -211,7 +211,7 @@ pub enum Assignment {
 }
 
 impl Assignment {
-    fn apply(self, sub: &Substitution) -> Self {
+    fn apply(self, sub: &dyn Substituter) -> Self {
         match self {
             Assignment::Variable(assign) => Assignment::Variable(assign.apply(sub)),
             Assignment::Member(assign) => Assignment::Member(assign.apply(sub)),
@@ -267,7 +267,7 @@ impl Expression {
             Expression::StringExpr(_) => MonoType::STRING,
             Expression::Integer(_) => MonoType::INT,
             Expression::Float(_) => MonoType::FLOAT,
-            Expression::StringLit(_) => MonoType::STRING,
+            Expression::StringLit(lit) => MonoType::Label(Label::from(lit.value.as_str())),
             Expression::Duration(_) => MonoType::DURATION,
             Expression::Uint(_) => MonoType::UINT,
             Expression::Boolean(_) => MonoType::BOOL,
@@ -329,7 +329,7 @@ impl Expression {
             Expression::Error(_) => Ok(()),
         }
     }
-    fn apply(self, sub: &Substitution) -> Self {
+    fn apply(self, sub: &dyn Substituter) -> Self {
         match self {
             Expression::Identifier(e) => Expression::Identifier(e.apply(sub)),
             Expression::Array(e) => Expression::Array(Box::new(e.apply(sub))),
@@ -413,12 +413,12 @@ where
     };
     pkg.infer(&mut infer).map_err(|err| err.apply(infer.sub))?;
 
-    infer.env.apply_mut(infer.sub);
+    infer.env.apply_mut(&FinalizeTypes { sub: infer.sub });
 
     if infer.errors.has_errors() {
         let sub = BindVars::new(infer.sub);
         for err in &mut infer.errors {
-            err.apply_mut(&sub);
+            err.apply_mut(&FinalizeTypes { sub: &sub });
         }
         Err(infer.errors)
     } else {
@@ -429,7 +429,27 @@ where
 /// Applies the substitution to the entire package.
 #[allow(missing_docs)]
 pub fn inject_pkg_types(pkg: Package, sub: &Substitution) -> Package {
-    pkg.apply(sub)
+    pkg.apply(&FinalizeTypes { sub })
+}
+
+struct FinalizeTypes<'a> {
+    sub: &'a dyn Substituter,
+}
+
+impl Substituter for FinalizeTypes<'_> {
+    fn try_apply(&self, tvr: Tvar) -> Option<MonoType> {
+        self.sub.try_apply(tvr)
+    }
+    fn visit_type(&self, typ: &MonoType) -> Option<MonoType> {
+        match typ {
+            MonoType::Var(tvr) => {
+                let typ = self.sub.try_apply(*tvr)?;
+                Some(self.visit_type(&typ).unwrap_or(typ))
+            }
+            MonoType::Label(_) => Some(MonoType::STRING),
+            _ => None,
+        }
+    }
 }
 
 /// Vectorizes a pkg
@@ -474,7 +494,7 @@ impl Package {
         }
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.files = self.files.into_iter().map(|file| file.apply(sub)).collect();
         self
     }
@@ -525,7 +545,7 @@ impl File {
         infer.imports.clear();
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.body = self.body.into_iter().map(|stmt| stmt.apply(sub)).collect();
         self
     }
@@ -577,7 +597,7 @@ impl OptionStmt {
             }
         }
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.assignment = self.assignment.apply(sub);
         self
     }
@@ -596,7 +616,7 @@ impl BuiltinStmt {
         infer.env.add(self.id.name.clone(), self.typ_expr.clone());
         Ok(())
     }
-    fn apply(self, _: &Substitution) -> Self {
+    fn apply(self, _: &dyn Substituter) -> Self {
         self
     }
 }
@@ -613,7 +633,7 @@ impl TestStmt {
     fn infer(&mut self, infer: &mut InferState<'_, '_>) -> Result<()> {
         self.assignment.infer(infer)
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.assignment = self.assignment.apply(sub);
         self
     }
@@ -644,7 +664,7 @@ impl TestCaseStmt {
         }
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.body = self.body.into_iter().map(|stmt| stmt.apply(sub)).collect();
         self
     }
@@ -663,7 +683,7 @@ impl ExprStmt {
         self.expression.infer(infer)?;
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.expression = self.expression.apply(sub);
         self
     }
@@ -682,7 +702,7 @@ impl ReturnStmt {
     fn infer(&mut self, infer: &mut InferState<'_, '_>) -> Result {
         self.argument.infer(infer)
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.argument = self.argument.apply(sub);
         self
     }
@@ -753,7 +773,7 @@ impl VariableAssgn {
         infer.env.add(self.id.name.clone(), p);
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.init = self.init.apply(sub);
         self
     }
@@ -769,7 +789,7 @@ pub struct MemberAssgn {
 }
 
 impl MemberAssgn {
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.member = self.member.apply(sub);
         self.init = self.init.apply(sub);
         self
@@ -798,7 +818,7 @@ impl StringExpr {
         }
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.parts = self.parts.into_iter().map(|part| part.apply(sub)).collect();
         self
     }
@@ -812,7 +832,7 @@ pub enum StringExprPart {
 }
 
 impl StringExprPart {
-    fn apply(self, sub: &Substitution) -> Self {
+    fn apply(self, sub: &dyn Substituter) -> Self {
         match self {
             StringExprPart::Interpolated(part) => StringExprPart::Interpolated(part.apply(sub)),
             StringExprPart::Text(_) => self,
@@ -837,7 +857,7 @@ pub struct InterpolatedPart {
 }
 
 impl InterpolatedPart {
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.expression = self.expression.apply(sub);
         self
     }
@@ -873,7 +893,7 @@ impl ArrayExpr {
         self.typ = MonoType::arr(elt);
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.typ = self.typ.apply(sub);
         self.elements = self
             .elements
@@ -919,7 +939,7 @@ impl DictExpr {
 
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.typ = self.typ.apply(sub);
         self.elements = self
             .elements
@@ -1092,7 +1112,7 @@ impl FunctionExpr {
         ds
     }
     #[allow(missing_docs)]
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.typ = self.typ.apply(sub);
         self.params = self
             .params
@@ -1193,7 +1213,7 @@ impl FunctionExpr {
                                 loc: e.loc.clone(),
                                 typ: MonoType::from(types::Record::new(
                                     properties.iter().map(|p| types::Property {
-                                        k: Label::from(p.key.name.clone()),
+                                        k: RecordLabel::from(p.key.name.clone()),
                                         v: p.value.type_of(),
                                     }),
                                     with.as_ref().map(|with| with.typ.clone()),
@@ -1296,7 +1316,7 @@ impl Block {
             }
         }
     }
-    fn apply(self, sub: &Substitution) -> Self {
+    fn apply(self, sub: &dyn Substituter) -> Self {
         match self {
             Block::Variable(assign, next) => {
                 Block::Variable(Box::new(assign.apply(sub)), Box::new(next.apply(sub)))
@@ -1319,7 +1339,7 @@ pub struct FunctionParameter {
 }
 
 impl FunctionParameter {
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         match self.default {
             Some(e) => {
                 self.default = Some(e.apply(sub));
@@ -1448,7 +1468,7 @@ impl BinaryExpr {
 
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.typ = self.typ.apply(sub);
         self.left = self.left.apply(sub);
         self.right = self.right.apply(sub);
@@ -1538,7 +1558,7 @@ impl CallExpr {
 
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.typ = self.typ.apply(sub);
         self.callee = self.callee.apply(sub);
         self.arguments = self
@@ -1583,7 +1603,7 @@ impl ConditionalExpr {
 
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.test = self.test.apply(sub);
         self.consequent = self.consequent.apply(sub);
         self.alternate = self.alternate.apply(sub);
@@ -1619,7 +1639,7 @@ impl LogicalExpr {
         ]);
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.left = self.left.apply(sub);
         self.right = self.right.apply(sub);
         self
@@ -1660,7 +1680,7 @@ impl MemberExpr {
         let r = {
             self.typ = MonoType::Var(infer.sub.fresh());
             let head = types::Property {
-                k: Label::from(self.property.to_owned()),
+                k: RecordLabel::from(self.property.to_owned()),
                 v: self.typ.to_owned(),
             };
             let tail = MonoType::Var(infer.sub.fresh());
@@ -1674,7 +1694,7 @@ impl MemberExpr {
         }]);
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.typ = self.typ.apply(sub);
         self.object = self.object.apply(sub);
         self
@@ -1714,7 +1734,7 @@ impl IndexExpr {
         ]);
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.typ = self.typ.apply(sub);
         self.array = self.array.apply(sub);
         self.index = self.index.apply(sub);
@@ -1749,7 +1769,7 @@ impl ObjectExpr {
             prop.value.infer(infer)?;
             r = MonoType::from(types::Record::Extension {
                 head: types::Property {
-                    k: Label::from(prop.key.name.clone()),
+                    k: RecordLabel::from(prop.key.name.clone()),
                     v: prop.value.type_of(),
                 },
                 tail: r,
@@ -1758,7 +1778,7 @@ impl ObjectExpr {
         self.typ = r;
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.typ = self.typ.apply(sub);
         if let Some(e) = self.with {
             self.with = Some(e.apply(sub));
@@ -1816,7 +1836,7 @@ impl UnaryExpr {
         }
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.typ = self.typ.apply(sub);
         self.argument = self.argument.apply(sub);
         self
@@ -1833,7 +1853,7 @@ pub struct Property {
 }
 
 impl Property {
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.value = self.value.apply(sub);
         self
     }
@@ -1859,7 +1879,7 @@ impl IdentifierExpr {
         self.typ = t;
         Ok(())
     }
-    fn apply(mut self, sub: &Substitution) -> Self {
+    fn apply(mut self, sub: &dyn Substituter) -> Self {
         self.typ = self.typ.apply(sub);
         self
     }
@@ -1895,7 +1915,7 @@ impl BooleanLit {
     fn infer(&mut self) -> Result {
         Ok(())
     }
-    fn apply(self, _: &Substitution) -> Self {
+    fn apply(self, _: &dyn Substituter) -> Self {
         self
     }
 }
@@ -1912,7 +1932,7 @@ impl IntegerLit {
     fn infer(&mut self) -> Result {
         Ok(())
     }
-    fn apply(self, _: &Substitution) -> Self {
+    fn apply(self, _: &dyn Substituter) -> Self {
         self
     }
 }
@@ -1929,7 +1949,7 @@ impl FloatLit {
     fn infer(&mut self) -> Result {
         Ok(())
     }
-    fn apply(self, _: &Substitution) -> Self {
+    fn apply(self, _: &dyn Substituter) -> Self {
         self
     }
 }
@@ -1946,7 +1966,7 @@ impl RegexpLit {
     fn infer(&mut self) -> Result {
         Ok(())
     }
-    fn apply(self, _: &Substitution) -> Self {
+    fn apply(self, _: &dyn Substituter) -> Self {
         self
     }
 }
@@ -1963,7 +1983,7 @@ impl StringLit {
     fn infer(&mut self) -> Result {
         Ok(())
     }
-    fn apply(self, _: &Substitution) -> Self {
+    fn apply(self, _: &dyn Substituter) -> Self {
         self
     }
 }
@@ -1980,7 +2000,7 @@ impl UintLit {
     fn infer(&mut self) -> Result {
         Ok(())
     }
-    fn apply(self, _: &Substitution) -> Self {
+    fn apply(self, _: &dyn Substituter) -> Self {
         self
     }
 }
@@ -1997,7 +2017,7 @@ impl DateTimeLit {
     fn infer(&mut self) -> Result {
         Ok(())
     }
-    fn apply(self, _: &Substitution) -> Self {
+    fn apply(self, _: &dyn Substituter) -> Self {
         self
     }
 }
@@ -2031,7 +2051,7 @@ impl DurationLit {
     fn infer(&mut self) -> Result {
         Ok(())
     }
-    fn apply(self, _: &Substitution) -> Self {
+    fn apply(self, _: &dyn Substituter) -> Self {
         self
     }
 }
