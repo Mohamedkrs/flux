@@ -686,23 +686,23 @@ mod tests {
         let mut ty = MonoType::from(Record::new(
             [
                 Property {
-                    k: Label::from("a"),
+                    k: Label::from("a").into(),
                     v: MonoType::BoundVar(Tvar(4949)),
                 },
                 Property {
-                    k: Label::from("b"),
+                    k: Label::from("b").into(),
                     v: MonoType::BoundVar(Tvar(4949)),
                 },
                 Property {
-                    k: Label::from("e"),
+                    k: Label::from("e").into(),
                     v: MonoType::BoundVar(Tvar(4957)),
                 },
                 Property {
-                    k: Label::from("f"),
+                    k: Label::from("f").into(),
                     v: MonoType::BoundVar(Tvar(4957)),
                 },
                 Property {
-                    k: Label::from("g"),
+                    k: Label::from("g").into(),
                     v: MonoType::BoundVar(Tvar(4957)),
                 },
             ],
@@ -733,9 +733,7 @@ vstr = v.str + "hello"
         v.normalize(&mut t);
         assert_eq!(format!("{}", t), "{B with int:int, sweet:A, str:string}");
 
-        assert_eq!(
-            serde_json::to_string_pretty(&t).unwrap(),
-            r#"{
+        expect_test::expect![[r#"{
   "Record": {
     "type": "Extension",
     "head": {
@@ -766,8 +764,8 @@ vstr = v.str + "hello"
       }
     }
   }
-}"#
-        );
+}"#]]
+        .assert_eq(&serde_json::to_string_pretty(&t).unwrap());
     }
 
     #[test]
@@ -797,9 +795,7 @@ p = o.ethan
         v.normalize(&mut t);
         assert_eq!(format!("{}", t), "{B with int:int, ethan:A}");
 
-        assert_eq!(
-            serde_json::to_string_pretty(&t).unwrap(),
-            r#"{
+        expect_test::expect![[r#"{
   "Record": {
     "type": "Extension",
     "head": {
@@ -821,8 +817,8 @@ p = o.ethan
       }
     }
   }
-}"#
-        );
+}"#]]
+        .assert_eq(&serde_json::to_string_pretty(&t).unwrap());
     }
 
     #[test]
