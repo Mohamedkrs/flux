@@ -686,8 +686,8 @@ impl<'input> Parser<'input> {
 
         let t = self.peek();
         let properties = match t.tok {
-            TokenType::Ident | TokenType::Mul => {
-                let identifier = self.parse_record_label();
+            TokenType::Ident => {
+                let identifier = self.parse_identifier();
                 let t = self.peek();
                 match t.tok {
                     TokenType::Colon => self.parse_property_type_list_suffix(identifier),
@@ -1479,16 +1479,6 @@ impl<'input> Parser<'input> {
                     });
                 }
             }
-        }
-    }
-    fn parse_record_label(&mut self) -> Identifier {
-        let t = match self.peek().tok {
-            TokenType::Mul => self.expect(TokenType::Mul),
-            _ => self.expect(TokenType::Ident),
-        };
-        Identifier {
-            base: self.base_node_from_token(&t),
-            name: t.lit,
         }
     }
     fn parse_identifier(&mut self) -> Identifier {
