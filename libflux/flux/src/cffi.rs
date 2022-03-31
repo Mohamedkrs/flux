@@ -733,38 +733,45 @@ vstr = v.str + "hello"
         v.normalize(&mut t);
         assert_eq!(format!("{}", t), "{B with int:int, sweet:A, str:string}");
 
-        expect_test::expect![[r#"{
-  "Record": {
-    "type": "Extension",
-    "head": {
-      "k": "int",
-      "v": "Int"
-    },
-    "tail": {
-      "Record": {
-        "type": "Extension",
-        "head": {
-          "k": "sweet",
-          "v": {
-            "Var": 0
-          }
-        },
-        "tail": {
-          "Record": {
-            "type": "Extension",
-            "head": {
-              "k": "str",
-              "v": "String"
-            },
-            "tail": {
-              "Var": 1
-            }
-          }
-        }
-      }
-    }
-  }
-}"#]]
+        expect_test::expect![[r#"
+            {
+              "Record": {
+                "type": "Extension",
+                "head": {
+                  "k": {
+                    "Concrete": "int"
+                  },
+                  "v": "Int"
+                },
+                "tail": {
+                  "Record": {
+                    "type": "Extension",
+                    "head": {
+                      "k": {
+                        "Concrete": "sweet"
+                      },
+                      "v": {
+                        "Var": 0
+                      }
+                    },
+                    "tail": {
+                      "Record": {
+                        "type": "Extension",
+                        "head": {
+                          "k": {
+                            "Concrete": "str"
+                          },
+                          "v": "String"
+                        },
+                        "tail": {
+                          "Var": 1
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }"#]]
         .assert_eq(&serde_json::to_string_pretty(&t).unwrap());
     }
 
@@ -795,29 +802,34 @@ p = o.ethan
         v.normalize(&mut t);
         assert_eq!(format!("{}", t), "{B with int:int, ethan:A}");
 
-        expect_test::expect![[r#"{
-  "Record": {
-    "type": "Extension",
-    "head": {
-      "k": "int",
-      "v": "Int"
-    },
-    "tail": {
-      "Record": {
-        "type": "Extension",
-        "head": {
-          "k": "ethan",
-          "v": {
-            "Var": 0
-          }
-        },
-        "tail": {
-          "Var": 1
-        }
-      }
-    }
-  }
-}"#]]
+        expect_test::expect![[r#"
+            {
+              "Record": {
+                "type": "Extension",
+                "head": {
+                  "k": {
+                    "Concrete": "int"
+                  },
+                  "v": "Int"
+                },
+                "tail": {
+                  "Record": {
+                    "type": "Extension",
+                    "head": {
+                      "k": {
+                        "Concrete": "ethan"
+                      },
+                      "v": {
+                        "Var": 0
+                      }
+                    },
+                    "tail": {
+                      "Var": 1
+                    }
+                  }
+                }
+              }
+            }"#]]
         .assert_eq(&serde_json::to_string_pretty(&t).unwrap());
     }
 
@@ -896,9 +908,9 @@ from(bucket: v.bucket)
 
         let src = r#"
             a = from(bucket: "b")
-                |> filter(fn: (r) => r.A == "A")
+                |> filter(fn: (r) => r.A_ == "A")
             b = from(bucket: "b")
-                |> filter(fn: (r) => r.B == "B")
+                |> filter(fn: (r) => r.B_ == "B")
             c = union(tables: [a, b])
         "#;
 
@@ -910,7 +922,7 @@ from(bucket: v.bucket)
         // https://github.com/influxdata/flux/issues/2466
         let code = "stream[{ D with
                 _value: A
-                    , A: B
+                    , A_: B
                     , _time: time
                     , _measurement: string
                     , _field: string
@@ -925,7 +937,7 @@ from(bucket: v.bucket)
 
         let code = "stream[{ D with
                 _value: A
-                    , B: B
+                    , B_: B
                     , _time: time
                     , _measurement: string
                     , _field: string
@@ -941,8 +953,8 @@ from(bucket: v.bucket)
 
         let code = "stream[{ D with
                 _value: A
-                    , A: B
-                    , B: C
+                    , A_: B
+                    , B_: C
                     , _time: time
                     , _measurement: string
                     , _field: string
